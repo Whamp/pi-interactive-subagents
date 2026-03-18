@@ -135,18 +135,10 @@ function formatBytes(bytes: number): string {
 function measureSessionProgress(
   sessionDir: string,
   existingFiles: Set<string>,
-  forkedSessionFile: string | null,
   trackedFile?: string | null,
   excludeFiles?: Set<string>,
 ): { file: string; entries: number; bytes: number } | null {
   try {
-    if (forkedSessionFile) {
-      const stat = statSync(forkedSessionFile);
-      const raw = readFileSync(forkedSessionFile, "utf8");
-      const entries = raw.split("\n").filter((l) => l.trim()).length;
-      return { file: forkedSessionFile, entries, bytes: stat.size };
-    }
-
     // If we already know which file to track, use it directly
     if (trackedFile) {
       const stat = statSync(trackedFile);
@@ -240,14 +232,10 @@ async function runSubagent(
 
     // Build pi command
     const parts: string[] = ["pi"];
+    parts.push("--session-dir", shellEscape(dirname(sessionFile)));
 
-    let forkedSessionFile: string | null = null;
     if (params.fork) {
-      const { copySessionFile } = await import("./session.ts");
-      forkedSessionFile = copySessionFile(sessionFile, dirname(sessionFile));
-      parts.push("--session", shellEscape(forkedSessionFile));
-    } else {
-      parts.push("--session-dir", shellEscape(dirname(sessionFile)));
+      parts.push("--fork", shellEscape(sessionFile));
     }
 
     const subagentDonePath = join(dirname(new URL(import.meta.url).pathname), "subagent-done.ts");
@@ -301,7 +289,7 @@ async function runSubagent(
       onTick() {
         const elapsed = formatElapsed(Math.floor((Date.now() - startTime) / 1000));
         const progress = measureSessionProgress(
-          sessionDir, existingSessionFiles, forkedSessionFile,
+          sessionDir, existingSessionFiles,
           trackedFile, claimedFiles,
         );
         if (progress && !trackedFile) {
@@ -319,9 +307,7 @@ async function runSubagent(
 
     // Find session file — use tracked file if we already identified it
     let subSessionFile: { path: string } | undefined;
-    if (forkedSessionFile) {
-      subSessionFile = { path: forkedSessionFile };
-    } else if (trackedFile) {
+    if (trackedFile) {
       subSessionFile = { path: trackedFile };
     } else {
       // Fallback: scan for new files (single-agent mode or file appeared late)
