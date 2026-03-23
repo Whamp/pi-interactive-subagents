@@ -482,6 +482,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const interactive = params.interactive !== false;
 
+      // Prevent self-spawning (e.g. planner spawning another planner)
+      const currentAgent = process.env.PI_SUBAGENT_AGENT;
+      if (params.agent && currentAgent && params.agent === currentAgent) {
+        return {
+          content: [{ type: "text", text: `You are the ${currentAgent} agent — do not start another ${currentAgent}. You were spawned to do this work yourself. Complete the task directly.` }],
+          details: { error: "self-spawn blocked" },
+        };
+      }
+
       // Validate prerequisites
       if (!isMuxAvailable()) {
         return muxUnavailableResult("subagents");
@@ -699,6 +708,18 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      // Prevent self-spawning (e.g. planner spawning another planner)
+      const currentAgent = process.env.PI_SUBAGENT_AGENT;
+      if (currentAgent) {
+        const selfSpawn = params.agents.find((a) => a.agent === currentAgent);
+        if (selfSpawn) {
+          return {
+            content: [{ type: "text", text: `You are the ${currentAgent} agent — do not start another ${currentAgent}. You were spawned to do this work yourself. Complete the task directly.` }],
+            details: { error: "self-spawn blocked" },
+          };
+        }
+      }
+
       if (!isMuxAvailable()) {
         return muxUnavailableResult("subagents");
       }
