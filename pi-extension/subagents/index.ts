@@ -267,32 +267,42 @@ const ACCENT = "\x1b[38;2;77;163;255m";
 const RST = "\x1b[0m";
 
 /**
- * Build a bordered widget line: │ content │
- * Truncates content to fit within innerWidth.
+ * Build a bordered content line: │left          right│
+ * Left content is truncated if needed, right is preserved, padded to fill width.
  */
-function borderLine(content: string, innerWidth: number): string {
-  const truncated = truncateToWidth(content, innerWidth);
-  const visible = visibleWidth(truncated);
-  const pad = Math.max(0, innerWidth - visible);
-  return `${ACCENT}│${RST}${truncated}${" ".repeat(pad)}${ACCENT}│${RST}`;
+function borderLine(left: string, right: string, width: number): string {
+  // width = total visible chars for the whole line including │ and │
+  const contentWidth = Math.max(0, width - 2); // space inside the two │ chars
+  const rightVis = visibleWidth(right);
+  const maxLeft = Math.max(0, contentWidth - rightVis);
+  const truncLeft = truncateToWidth(left, maxLeft);
+  const leftVis = visibleWidth(truncLeft);
+  const pad = Math.max(0, contentWidth - leftVis - rightVis);
+  return `${ACCENT}│${RST}${truncLeft}${" ".repeat(pad)}${right}${ACCENT}│${RST}`;
 }
 
 /**
  * Build the bordered top line: ╭─ Title ──── info ─╮
+ * All chars are accounted for within `width`.
  */
-function borderTop(title: string, info: string, innerWidth: number): string {
-  const titlePart = ` ${title} `;
-  const infoPart = ` ${info} `;
-  const fillLen = Math.max(0, innerWidth - titlePart.length - infoPart.length);
+function borderTop(title: string, info: string, width: number): string {
+  // ╭─ Title ───...─── info ─╮
+  // overhead: ╭─ (2) + space around title (2) + space around info (2) + ─╮ (2) = but we simplify
+  const inner = Math.max(0, width - 2); // inside ╭ and ╮
+  const titlePart = `─ ${title} `;
+  const infoPart = ` ${info} ─`;
+  const fillLen = Math.max(0, inner - titlePart.length - infoPart.length);
   const fill = "─".repeat(fillLen);
-  return truncateToWidth(`${ACCENT}╭─${titlePart}${fill}${infoPart}─╮${RST}`, innerWidth + 2);
+  const content = `${titlePart}${fill}${infoPart}`.slice(0, inner).padEnd(inner, "─");
+  return `${ACCENT}╭${content}╮${RST}`;
 }
 
 /**
  * Build the bordered bottom line: ╰──────────────────╯
  */
-function borderBottom(innerWidth: number): string {
-  return `${ACCENT}╰${"─".repeat(innerWidth)}╯${RST}`;
+function borderBottom(width: number): string {
+  const inner = Math.max(0, width - 2);
+  return `${ACCENT}╰${"─".repeat(inner)}╯${RST}`;
 }
 
 function updateWidget() {
@@ -313,28 +323,25 @@ function updateWidget() {
       return {
         invalidate() {},
         render(width: number) {
-          const innerWidth = Math.max(4, width - 2);
           const count = runningSubagents.size;
           const title = "Subagents";
           const info = `${count} running`;
 
-          const lines: string[] = [borderTop(title, info, innerWidth)];
+          const lines: string[] = [borderTop(title, info, width)];
 
           for (const [_id, agent] of runningSubagents) {
             const elapsed = formatElapsedMMSS(agent.startTime);
             const agentTag = agent.agent ? ` (${agent.agent})` : "";
-            const progress =
+            const left = ` ${elapsed}  ${agent.name}${agentTag} `;
+            const right =
               agent.entries != null && agent.bytes != null
-                ? `${agent.entries} msgs (${formatBytes(agent.bytes)})`
-                : "starting…";
+                ? ` ${agent.entries} msgs (${formatBytes(agent.bytes)}) `
+                : " starting… ";
 
-            lines.push(borderLine(
-              ` ${elapsed}  ${agent.name}${agentTag}  ${progress}`,
-              innerWidth,
-            ));
+            lines.push(borderLine(left, right, width));
           }
 
-          lines.push(borderBottom(innerWidth));
+          lines.push(borderBottom(width));
           return lines;
         },
       };
