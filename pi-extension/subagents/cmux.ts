@@ -192,9 +192,6 @@ export function createSurfaceSplit(
     execSync(`cmux rename-tab --surface ${shellEscape(surface)} ${shellEscape(name)}`, {
       encoding: "utf8",
     });
-    execSync(`cmux focus-panel --panel ${shellEscape(surface)}`, {
-      encoding: "utf8",
-    });
     return surface;
   }
 
@@ -223,7 +220,6 @@ export function createSurfaceSplit(
     } catch {
       // Optional.
     }
-    execFileSync("tmux", ["select-pane", "-t", pane], { encoding: "utf8" });
     return pane;
   }
 
