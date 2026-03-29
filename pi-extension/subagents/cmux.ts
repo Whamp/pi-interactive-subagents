@@ -165,7 +165,11 @@ async function zellijActionAsync(args: string[], surface?: string): Promise<stri
  * Returns an identifier (`surface:42` in cmux, `%12` in tmux, `pane:7` in zellij).
  */
 export function createSurface(name: string): string {
-  return createSurfaceSplit(name, "right");
+  // When running in tmux, default to splitting the current process's pane
+  // (TMUX_PANE) rather than whichever pane happens to be focused.
+  // This ensures subagent panes appear in the correct window.
+  const fromSurface = process.env.TMUX_PANE;
+  return createSurfaceSplit(name, "right", fromSurface);
 }
 
 /**
