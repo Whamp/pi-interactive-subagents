@@ -17,6 +17,7 @@ import {
   isMuxAvailable,
   muxSetupHint,
   createSurface,
+  createSurfaceSplit,
   sendCommand,
   pollForExit,
   closeSurface,
@@ -409,10 +410,18 @@ async function launchSubagent(
   const subagentSessionFile = join(sessionDir, `${timestamp}_${uuid}.jsonl`);
 
   // Use pre-created surface (parallel mode) or create a new one.
-  // For new surfaces, pause briefly so the shell is ready before sending the command.
-  const surfacePreCreated = !!options?.surface;
-  const surface = options?.surface ?? createSurface(params.name);
-  if (!surfacePreCreated) {
+  let surface: string;
+  if (options?.surface) {
+    surface = options.surface;
+  } else {
+    // If other subagents are running, stack below the last one.
+    // Otherwise split the parent pane to the right.
+    const lastRunning = [...runningSubagents.values()].pop();
+    if (lastRunning) {
+      surface = createSurfaceSplit(params.name, "down", lastRunning.surface);
+    } else {
+      surface = createSurface(params.name);
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 500));
   }
 
@@ -1073,7 +1082,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Record entry count before resuming so we can extract new messages
         const entryCountBefore = getNewEntries(params.sessionPath, 0).length;
 
-        const surface = createSurface(name);
+        // Stack below the last running subagent, or split the parent rightward.
+        const lastRunning = [...runningSubagents.values()].pop();
+        const surface = lastRunning
+          ? createSurfaceSplit(name, "down", lastRunning.surface)
+          : createSurface(name);
         await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
         // Build pi resume command
