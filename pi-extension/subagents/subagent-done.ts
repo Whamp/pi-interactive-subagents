@@ -156,6 +156,10 @@ export default function (pi: ExtensionAPI) {
       "Your LAST assistant message before calling this becomes the summary returned to the caller.",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      // Abort first to stop the agent loop immediately — without this,
+      // ctx.shutdown() only sets a flag that's checked at agent_end,
+      // allowing the model to generate more tool calls after this one.
+      ctx.abort();
       ctx.shutdown();
       return {
         content: [{ type: "text", text: "Shutting down subagent session." }],
