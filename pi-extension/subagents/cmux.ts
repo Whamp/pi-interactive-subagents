@@ -7,6 +7,7 @@ import { basename, join } from "node:path";
 const execFileAsync = promisify(execFile);
 
 export type MuxBackend = "cmux" | "tmux" | "zellij";
+export type SubagentLayout = "split" | "window";
 
 const commandAvailability = new Map<string, boolean>();
 
@@ -31,6 +32,17 @@ function muxPreference(): MuxBackend | null {
   const pref = (process.env.PI_SUBAGENT_MUX ?? "").trim().toLowerCase();
   if (pref === "cmux" || pref === "tmux" || pref === "zellij") return pref;
   return null;
+}
+
+/**
+ * Return the preferred subagent layout.
+ * PI_SUBAGENT_LAYOUT=window → each subagent gets its own tmux window (tab).
+ * PI_SUBAGENT_LAYOUT=split (default) → subagents split panes like before.
+ */
+export function subagentLayout(): SubagentLayout {
+  const pref = (process.env.PI_SUBAGENT_LAYOUT ?? "").trim().toLowerCase();
+  if (pref === "window" || pref === "tab") return "window";
+  return "split";
 }
 
 function isCmuxRuntimeAvailable(): boolean {
@@ -170,6 +182,30 @@ export function createSurface(name: string): string {
   // This ensures subagent panes appear in the correct window.
   const fromSurface = process.env.TMUX_PANE;
   return createSurfaceSplit(name, "right", fromSurface);
+}
+
+/**
+ * Create a new tmux window (tab) for a subagent.
+ * Returns the pane id of the new window's single pane (`%12`).
+ * For cmux/zellij, falls back to createSurface (split).
+ */
+export function createSurfaceWindow(name: string): string {
+  const backend = requireMuxBackend();
+
+  if (backend === "tmux") {
+    const pane = execFileSync(
+      "tmux",
+      ["new-window", "-d", "-P", "-F", "#{pane_id}", "-n", name],
+      { encoding: "utf8" },
+    ).trim();
+    if (!pane.startsWith("%")) {
+      throw new Error(`Unexpected tmux new-window output: ${pane}`);
+    }
+    return pane;
+  }
+
+  // cmux and zellij don't have a meaningful "window" concept here — fall back to split.
+  return createSurface(name);
 }
 
 /**

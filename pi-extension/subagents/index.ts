@@ -18,6 +18,8 @@ import {
   muxSetupHint,
   createSurface,
   createSurfaceSplit,
+  createSurfaceWindow,
+  subagentLayout,
   sendCommand,
   pollForExit,
   closeSurface,
@@ -413,9 +415,12 @@ async function launchSubagent(
   let surface: string;
   if (options?.surface) {
     surface = options.surface;
+  } else if (subagentLayout() === "window") {
+    // Window mode: each subagent gets its own tmux tab.
+    surface = createSurfaceWindow(params.name);
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
   } else {
-    // If other subagents are running, stack below the last one.
-    // Otherwise split the parent pane to the right.
+    // Split mode (default): first subagent splits right, subsequent stack below.
     const lastRunning = [...runningSubagents.values()].pop();
     if (lastRunning) {
       surface = createSurfaceSplit(params.name, "down", lastRunning.surface);
@@ -1083,10 +1088,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const entryCountBefore = getNewEntries(params.sessionPath, 0).length;
 
         // Stack below the last running subagent, or split the parent rightward.
-        const lastRunning = [...runningSubagents.values()].pop();
-        const surface = lastRunning
-          ? createSurfaceSplit(name, "down", lastRunning.surface)
-          : createSurface(name);
+        // In window mode, each subagent gets its own tmux tab.
+        let surface: string;
+        if (subagentLayout() === "window") {
+          surface = createSurfaceWindow(name);
+        } else {
+          const lastRunning = [...runningSubagents.values()].pop();
+          surface = lastRunning
+            ? createSurfaceSplit(name, "down", lastRunning.surface)
+            : createSurface(name);
+        }
         await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
         // Build pi resume command
