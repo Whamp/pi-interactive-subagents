@@ -13,6 +13,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { listRunArtifacts } from "../session-artifacts/artifact-registry.ts";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -914,13 +915,31 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         watchSubagent(running, watcherAbort.signal)
           .then((result) => {
             updateWidget(); // reflect removal from Map immediately
+
+            // Discover artifacts written during this run
+            const sessionDir = dirname(running.sessionFile ?? "");
+            const registry = listRunArtifacts(sessionDir, running.id);
+
             const sessionRef = result.sessionFile
               ? `\n\nSession: ${result.sessionFile}\nResume: pi --session ${result.sessionFile}`
               : "";
+
+            // Build artifact handoff guidance for successful completions
+            let artifactRef = "";
+            if (result.exitCode === 0 && registry.artifacts.length > 0) {
+              const artifactList = registry.artifacts
+                .map((a) => `  - ${a.name}`)
+                .join("\n");
+              artifactRef = `\n\nArtifacts written:\n${artifactList}`;
+              if (registry.primaryArtifact) {
+                artifactRef += `\n\nPrimary artifact: read_artifact("${registry.primaryArtifact}")`;
+              }
+            }
+
             const content =
               result.exitCode !== 0
                 ? `Sub-agent "${running.name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${sessionRef}`
-                : `Sub-agent "${running.name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${sessionRef}`;
+                : `Sub-agent "${running.name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${artifactRef}${sessionRef}`;
 
             pi.sendMessage(
               {
@@ -934,6 +953,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                   exitCode: result.exitCode,
                   elapsed: result.elapsed,
                   sessionFile: result.sessionFile,
+                  artifacts: registry.artifacts,
+                  primaryArtifact: registry.primaryArtifact,
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },
@@ -1389,9 +1410,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const header = `${icon} ${theme.fg("toolTitle", theme.bold(name))}${agentTag} ${theme.fg("dim", "—")} ${status} ${theme.fg("dim", `(${elapsed})`)}`;
         const rawContent = typeof message.content === "string" ? message.content : "";
 
-        // Clean summary (remove session ref and leading label for display)
+        // Clean summary (remove session ref, artifact ref, and leading label for display)
         const summary = rawContent
           .replace(/\n\nSession: .+\nResume: .+$/, "")
+          .replace(/\n\nArtifacts written:\n[\s\S]*$/, "")
           .replace(`Sub-agent "${name}" completed (${elapsed}).\n\n`, "")
           .replace(`Sub-agent "${name}" failed (exit code ${exitCode}).\n\n`, "");
 
@@ -1399,10 +1421,24 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const contentLines = [header];
 
         if (options.expanded) {
-          // Full view: complete summary + session info
+          // Full view: complete summary + artifact info + session info
           if (summary) {
             for (const line of summary.split("\n")) {
               contentLines.push(line.slice(0, width - 6));
+            }
+          }
+          // Artifact handoff display
+          const artifacts: { name: string }[] = details.artifacts ?? [];
+          const primaryArtifact: string | null = details.primaryArtifact ?? null;
+          if (artifacts.length > 0) {
+            contentLines.push("");
+            contentLines.push(theme.fg("accent", "Artifacts:"));
+            for (const a of artifacts) {
+              const tag = a.name === primaryArtifact ? theme.fg("success", " (primary)") : "";
+              contentLines.push(theme.fg("dim", `  - ${a.name}`) + tag);
+            }
+            if (primaryArtifact) {
+              contentLines.push(theme.fg("accent", `read_artifact("${primaryArtifact}")`));
             }
           }
           if (details.sessionFile) {
