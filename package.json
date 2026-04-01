@@ -13,7 +13,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test test/test.ts test/artifact-namespace.test.ts test/artifact-registry.test.ts"
+    "test": "node --test test/test.ts test/artifact-namespace.test.ts test/artifact-registry.test.ts test/artifact-contract.test.ts"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

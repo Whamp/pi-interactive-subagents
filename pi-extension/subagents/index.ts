@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { listRunArtifacts } from "../session-artifacts/artifact-registry.ts";
+import { validateArtifactContract, type ArtifactContract } from "../session-artifacts/artifact-contract.ts";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -76,6 +77,10 @@ interface AgentDefaults {
   systemPromptMode?: "append" | "replace";
   cwd?: string;
   body?: string;
+  /** Whether producing an artifact is required for this agent */
+  artifactRequired?: boolean;
+  /** Expected logical artifact name (e.g., "context.md") */
+  artifactName?: string;
 }
 
 /** Tools that are gated by `spawning: false` */
@@ -136,6 +141,7 @@ function loadAgentDefaults(agentName: string): AgentDefaults | null {
     const autoExitRaw = get("auto-exit");
     const spm = get("system-prompt");
     const fallbackRaw = get("fallback-models");
+    const artifactRequiredRaw = get("artifact-required");
     return {
       model: get("model"),
       fallbackModels: fallbackRaw
@@ -153,6 +159,8 @@ function loadAgentDefaults(agentName: string): AgentDefaults | null {
       autoExit: autoExitRaw != null ? autoExitRaw === "true" : undefined,
       cwd: get("cwd"),
       body: body || undefined,
+      artifactRequired: artifactRequiredRaw === "true",
+      artifactName: get("artifact-name"),
     };
   }
   return null;
@@ -936,10 +944,33 @@ export default function subagentsExtension(pi: ExtensionAPI) {
               }
             }
 
+            // Validate artifact contract for successful completions
+            let contractFailureRef = "";
+            const contractDetails: Record<string, unknown> = {};
+            if (result.exitCode === 0 && running.agentDefs) {
+              const contract: ArtifactContract = {
+                required: running.agentDefs.artifactRequired === true,
+                expectedName: running.agentDefs.artifactName,
+              };
+              const validation = validateArtifactContract(contract, registry.artifacts);
+              contractDetails.contractSatisfied = validation.satisfied;
+              contractDetails.contractRequired = contract.required;
+              if (contract.expectedName) {
+                contractDetails.contractExpectedName = contract.expectedName;
+              }
+              if (!validation.satisfied) {
+                contractDetails.contractFailureReason = validation.failureReason;
+                contractDetails.contractRecoveryGuidance = validation.recoveryGuidance;
+                contractFailureRef =
+                  `\n\n⚠ Artifact contract failure: ${validation.failureReason}` +
+                  `\n\nRecovery: ${validation.recoveryGuidance}`;
+              }
+            }
+
             const content =
               result.exitCode !== 0
                 ? `Sub-agent "${running.name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${sessionRef}`
-                : `Sub-agent "${running.name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${artifactRef}${sessionRef}`;
+                : `Sub-agent "${running.name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${artifactRef}${contractFailureRef}${sessionRef}`;
 
             pi.sendMessage(
               {
@@ -955,6 +986,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                   sessionFile: result.sessionFile,
                   artifacts: registry.artifacts,
                   primaryArtifact: registry.primaryArtifact,
+                  ...contractDetails,
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },
@@ -1439,6 +1471,17 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             }
             if (primaryArtifact) {
               contentLines.push(theme.fg("accent", `read_artifact("${primaryArtifact}")`));
+            }
+          }
+          // Contract failure display
+          if (details.contractSatisfied === false) {
+            contentLines.push("");
+            contentLines.push(theme.fg("error", "⚠ Artifact contract failure"));
+            if (details.contractFailureReason) {
+              contentLines.push(theme.fg("dim", `  ${details.contractFailureReason}`));
+            }
+            if (details.contractRecoveryGuidance) {
+              contentLines.push(theme.fg("accent", `  Recovery: ${details.contractRecoveryGuidance}`));
             }
           }
           if (details.sessionFile) {
