@@ -26,7 +26,7 @@ subagent({ name: "Scout: DB", agent: "scout", task: "Map database schema" });
 ## Install
 
 ```bash
-pi install git:github.com/HazAT/pi-interactive-subagents
+pi install git:github.com/Whamp/pi-interactive-subagents
 ```
 
 Supported multiplexers:
@@ -350,6 +350,10 @@ Optional backend override:
 ```bash
 export PI_SUBAGENT_MUX=cmux   # or tmux, zellij
 ```
+
+## Credits
+
+Forked from [HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents) — thanks to [HazAT](https://github.com/HazAT) for the original project.
 
 ## License
 

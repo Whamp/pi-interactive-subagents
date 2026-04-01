@@ -6,10 +6,10 @@
     "pi-package"
   ],
   "license": "MIT",
-  "author": "HazAT",
+  "author": "Whamp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HazAT/pi-interactive-subagents"
+    "url": "https://github.com/Whamp/pi-interactive-subagents"
   },
   "type": "module",
   "scripts": {
