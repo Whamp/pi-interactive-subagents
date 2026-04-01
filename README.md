@@ -75,13 +75,13 @@ Optional: set `PI_SUBAGENT_MUX=cmux|tmux|zellij` to force a specific backend.
 
 ### Bundled Agents
 
-| Agent             | Model                  | Role                                                                                     |
-| ----------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| **planner**       | Opus (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans, creates todos |
-| **scout**         | Haiku                  | Fast codebase reconnaissance — maps files, patterns, conventions                         |
-| **worker**        | Sonnet                 | Implements tasks from todos — writes code, runs tests, makes polished commits            |
-| **reviewer**      | Opus (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
-| **visual-tester** | Sonnet                 | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
+| Agent             | Model                        | Role                                                                                              |
+| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| **planner**       | Opus (extended thinking)     | Takes a PRD, explores approaches, validates design, runs premortem, creates vertical slice work items |
+| **scout**         | Gemini Flash                 | Fast read-only codebase reconnaissance — maps files, patterns, conventions                        |
+| **worker**        | GLM 5.1                      | Implements tasks from GitHub Issues or Todos using TDD — writes code, runs tests, makes polished commits |
+| **reviewer**      | Gemini Pro (high thinking)   | Autonomous code review for bugs, security issues, correctness                                     |
+| **visual-tester** | Gemini Flash                 | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing                   |
 
 Agent discovery follows priority: **project-local** (`.pi/agents/`) > **global** (`~/.pi/agent/agents/`) > **package-bundled**. Override any bundled agent by placing your own version in the higher-priority location.
 
@@ -150,25 +150,28 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 
 ## The `/plan` Workflow
 
-The `/plan` command orchestrates a full planning-to-implementation pipeline.
+The `/plan` command orchestrates a full planning-to-implementation pipeline, separating WHAT to build from HOW to build it.
 
 ```
 /plan Add a dark mode toggle to the settings page
 ```
 
 ```
-Phase 1: Investigation    → Quick codebase scan
-Phase 2: Planning         → Interactive planner subagent (user collaborates)
-Phase 3: Review Plan      → Confirm todos, adjust if needed
-Phase 4: Execute          → Scout + sequential workers implement todos
-Phase 5: Review           → Reviewer subagent checks all changes
+Phase 1: Scout            → Codebase reconnaissance
+Phase 2: Grill-me         → Main session interviews user to build shared understanding
+Phase 3: Write-a-PRD      → Produces a PRD (as GitHub Issue or local artifact)
+Phase 4: Planner          → Interactive subagent figures out HOW, creates vertical slices
+Phase 5: Execute          → Workers implement slices using TDD (AFK items autonomous, HITL flagged)
+Phase 6: Review           → Reviewer subagent checks all changes
 ```
+
+At the start of Phase 3, the workflow asks whether to track work as **GitHub Issues** (persistent, autonomous workers pick them up across sessions) or **Todos** (session-scoped, good for quick/offline work). Each vertical slice is tagged **AFK** (autonomous) or **HITL** (needs human decision).
 
 Tab/window titles update to show current phase:
 
 ```
-🔍 Investigating: dark mode → 💬 Planning: dark mode
-→ 🔨 Executing: 1/3 → 🔎 Reviewing → ✅ Done
+🔍 Investigating: dark mode → 🔥 Grilling: dark mode → 📝 PRD: dark mode
+→ 💬 Planning: dark mode → 🔨 Executing: 1/3 → 🔎 Reviewing → ✅ Done
 ```
 
 ---
