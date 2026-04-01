@@ -5,6 +5,8 @@ tools: bash, read, write
 model: google-antigravity/gemini-3-flash
 skill: chrome-cdp
 thinking: high
+artifact-required: true
+artifact-name: visual-test-report.md
 spawning: false
 auto-exit: true
 ---

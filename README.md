@@ -222,6 +222,8 @@ You are a specialized agent that does X...
 | `spawning`    | boolean | Set `false` to deny all subagent-spawning tools                                                                                                                                                                                                                             |
 | `deny-tools`  | string  | Comma-separated extension tool names to deny                                                                                                                                                                                                                                |
 | `auto-exit`   | boolean | Auto-shutdown when the agent finishes its turn — no `subagent_done` call needed. If the user sends any input, auto-exit is permanently disabled and the user takes over the session. Recommended for autonomous agents (scout, worker); not for interactive ones (planner). |
+| `artifact-required` | boolean | When `true`, report a contract failure if the agent produces no artifact on completion |
+| `artifact-name` | string | Expected logical artifact name (e.g., `context.md`). Omit for variable-name artifacts. |
 | `cwd`         | string  | Default working directory (absolute or relative to project root)                                                                                                                                                                                                            |
 
 ---
@@ -249,6 +251,44 @@ auto-exit: true
 ```
 
 ---
+
+### Artifact Contract
+
+Agent definitions can declare artifact requirements via frontmatter. When a subagent finishes, the framework validates its output against the declared contract and reports failures with recovery guidance.
+
+```yaml
+---
+name: scout
+artifact-required: true
+artifact-name: context.md
+---
+```
+
+**Frontmatter fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `artifact-required` | boolean | When `true`, the framework reports a contract failure if the agent exits without producing the expected artifact |
+| `artifact-name` | string | Expected logical artifact name (e.g., `context.md`). Omit when the name is variable (e.g., planner outputs `plans/YYYY-MM-DD-<name>.md`). |
+
+**How it works:**
+
+1. A subagent runs and writes artifacts via `write_artifact`
+2. On completion, the framework scans the run-scoped artifact directory
+3. If `artifact-required: true` and no artifact exists, the steer message includes a contract failure with recovery guidance (resume instruction + expected `write_artifact` call)
+4. If `artifact-name` is set and a different artifact was produced, the failure names the expected vs. actual artifacts
+
+**Primary artifact handoff:** When a subagent produces exactly one artifact, it is automatically designated the primary. The completion message tells the orchestrator exactly which artifact name to pass to `read_artifact()`. Artifact contents are never auto-loaded — the orchestrator explicitly reads them.
+
+**Bundled agent contracts:**
+
+| Agent | `artifact-required` | `artifact-name` | Rationale |
+|-------|--------------------|-----------------|-----------|
+| scout | `true` | `context.md` | Always produces a context report |
+| reviewer | `true` | `review.md` | Always produces a review |
+| visual-tester | `true` | `visual-test-report.md` | Always produces a visual test report |
+| planner | `true` | _(none)_ | Variable name (`plans/YYYY-MM-DD-<name>.md`) |
+| worker | _(none)_ | _(none)_ | Artifact output is task-dependent |
 
 ### Fallback Models
 

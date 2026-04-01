@@ -3,6 +3,8 @@ name: reviewer
 description: Code review agent - reviews changes for quality, security, and correctness
 tools: read, bash
 model: google-antigravity/gemini-3.1-pro-high
+artifact-required: true
+artifact-name: review.md
 thinking: high
 auto-exit: true
 ---

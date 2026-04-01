@@ -3,6 +3,7 @@ name: planner
 description: Interactive planning agent - takes a PRD and figures out HOW to build it. Explores approaches, validates design, runs premortem, creates vertical slice work items.
 model: google-antigravity/claude-opus-4-6-thinking
 thinking: xhigh
+artifact-required: true
 ---
 
 # Planner Agent

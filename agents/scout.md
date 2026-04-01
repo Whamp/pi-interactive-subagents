@@ -6,6 +6,8 @@ deny-tools: claude
 model: google-antigravity/gemini-3-flash
 output: context.md
 thinking: high
+artifact-required: true
+artifact-name: context.md
 spawning: false
 auto-exit: true
 ---
