@@ -9,102 +9,62 @@ description: >
 
 # Plan
 
-A planning workflow that separates WHAT (grill-me + write-a-prd) from HOW (planner). The main session builds shared understanding with the user, then a planner subagent figures out the technical approach and creates work items.
+A planning workflow that separates WHAT (grill-me + write-a-prd) from HOW (planner). You build shared understanding with the user, produce a PRD, then a planner subagent figures out the technical approach and creates work items.
 
-**Announce at start:** "Let me investigate first, then we'll nail down exactly what we're building."
+**No implementation before a PRD exists. No exceptions.**
+
+## Workflow Overview
+
+```
+Phase 1: Grill (you are HERE — start immediately)
+    ↓
+Phase 2: Write-a-PRD (main session — produces PRD)
+    ↓
+Phase 3: Planner (subagent, interactive — figures out HOW)
+    ↓
+Phase 4: Execute (workers with mandatory TDD)
+    ↓
+Phase 5: Review
+```
 
 ---
 
 ## Tab Titles
 
-Use `set_tab_title` to keep the user informed of progress in the multiplexer UI. Update the title at every phase transition.
+Use `set_tab_title` to keep the user informed of progress. Update at every phase transition.
 
-| Phase         | Title example                                                  |
-| ------------- | -------------------------------------------------------------- |
-| Investigation | `🔍 Investigating: <short task>`                               |
-| Grilling      | `🔥 Grilling: <short task>`                                    |
-| PRD           | `📝 PRD: <short task>`                                         |
-| Planning      | `💬 Planning: <short task>`                                    |
-| Review plan   | `📋 Review: <short task>`                                      |
-| Executing     | `🔨 Executing: 1/3 — <short task>` (update counter per worker) |
-| Reviewing     | `🔎 Reviewing: <short task>`                                   |
-| Done          | `✅ Done: <short task>`                                        |
-
-Name subagents with context too:
-
-- Scout: `"🔍 Scout"` (default is fine)
-- Planner: `"💬 Planner"`
-- Workers: `"🔨 Worker 1/3"`, `"🔨 Worker 2/3"`, etc.
-- Reviewer: `"🔎 Reviewer"`
+| Phase     | Title example                                                  |
+| --------- | -------------------------------------------------------------- |
+| Grilling  | `🔥 Grilling: <short task>`                                    |
+| PRD       | `📝 PRD: <short task>`                                         |
+| Planning  | `💬 Planning: <short task>`                                    |
+| Executing | `🔨 Executing: 1/3 — <short task>` (update counter per worker) |
+| Reviewing | `🔎 Reviewing: <short task>`                                   |
+| Done      | `✅ Done: <short task>`                                        |
 
 ---
 
-## The Flow
+## Phase 1: Grill — START NOW
 
-```
-Phase 1: Scout (codebase reconnaissance)
-    ↓
-Phase 2: Grill-me (main session — builds shared understanding)
-    ↓
-Phase 3: Write-a-PRD (main session — produces PRD)
-    ↓
-Phase 4: Planner (subagent, interactive — figures out HOW)
-    ↓
-Phase 5: Execute (workers with mandatory TDD)
-    ↓
-Phase 6: Review
-```
-
----
-
-## Phase 1: Scout
-
-Before grilling the user, orient yourself on the codebase.
-
-**Quick look (small/familiar codebases):**
-
-```bash
-ls -la
-find . -type f -name "*.ts" | head -20  # or relevant extension
-cat package.json 2>/dev/null | head -30
-```
-
-**Deep scout (large/unfamiliar codebases):**
-
-```typescript
-subagent({
-  name: "Scout",
-  agent: "scout",
-  interactive: false,
-  task: "Analyze the codebase. Map file structure, key modules, patterns, and conventions. Summarize findings concisely.",
-});
-```
-
-Read the scout's context artifact before proceeding.
-
----
-
-## Phase 2: Grill-me
-
-**This happens in the main session — not a subagent.** The shared understanding built here is the foundation for everything downstream.
-
-Load the grill-me skill:
-
-```
-/skill:grill-me
-```
+Set the tab title to `🔥 Grilling: <short task>` and begin immediately.
 
 Interview the user relentlessly about every aspect of what they want to build. Walk down each branch of the design tree, resolving dependencies between decisions one by one. For each question, provide your recommended answer.
 
-If a question can be answered by exploring the codebase, explore the codebase instead of asking.
+If a question can be answered by exploring the codebase, explore the codebase instead of asking. Use `read`, `bash`, `grep`, `find` to orient yourself as needed — there is no separate scout phase.
 
-**Do not move to Phase 3 until you and the user have shared understanding of what to build.**
+**Do not move to Phase 2 until you and the user have shared understanding of what to build.**
+
+When you have no more questions and all branches are resolved, ask:
+
+> "I've covered everything I need. Ready to write the PRD?"
+
+Wait for the user to confirm before proceeding.
 
 ---
 
-## Phase 3: Write-a-PRD
+## Phase 2: Write-a-PRD
 
-**This also happens in the main session.** The shared context from grill-me is in the conversation — don't lose it by delegating to a subagent.
+Set the tab title to `📝 PRD: <short task>`.
 
 Load the write-a-prd skill:
 
@@ -116,14 +76,14 @@ Load the write-a-prd skill:
 
 > "Should we track work as **GitHub Issues** (persistent, autonomous workers can pick them up across sessions) or **Todos** (session-scoped, good for quick/offline work)?"
 
-Remember their choice — it flows to the planner in Phase 4.
+Remember their choice — it flows to the planner in Phase 3.
 
-**Since grill-me already ran, skip Step 3 of write-a-prd** (the interview step). The shared understanding is already built. Proceed directly to:
+**Since grilling already ran, skip Step 3 of write-a-prd** (the interview step). The shared understanding is already built. Proceed directly to:
 
-1. Explore the repo to verify assertions (if not already done via scout)
+1. Explore the repo to verify assertions (if not already done during grilling)
 2. Sketch major modules — look for deep modules that can be tested in isolation
 3. Write the PRD using the template, adding:
-   - **ISC section** — atomic, binary, testable success criteria (from spec philosophy)
+   - **ISC section** — atomic, binary, testable success criteria
    - **Effort level** — prototype / MVP / production / critical
 4. Output the PRD:
    - **Issues path:** Submit as a GitHub Issue
@@ -131,7 +91,9 @@ Remember their choice — it flows to the planner in Phase 4.
 
 ---
 
-## Phase 4: Planner
+## Phase 3: Planner
+
+Set the tab title to `💬 Planning: <short task>`.
 
 Spawn the interactive planner subagent. Pass it the PRD reference and the chosen output format.
 
@@ -145,7 +107,7 @@ subagent({
 Output format: [Issues / Todos]
 
 Context from investigation:
-[paste relevant findings from Phase 1]`,
+[paste relevant findings from grilling phase]`,
 });
 ```
 
@@ -160,7 +122,9 @@ When done, the user presses Ctrl+D and the plan + work items are returned.
 
 ---
 
-## Phase 5: Execute
+## Phase 4: Execute
+
+Set the tab title to `🔨 Executing: 1/N — <short task>`.
 
 Once the planner closes, review the work items:
 
@@ -177,9 +141,9 @@ todo(action: "list")
 Review with the user:
 > "Here's what the planner produced: [brief summary]. Ready to execute, or anything to adjust?"
 
-### Execution Order
+### Execution Order HITL Can be blocking
 
-**AFK items first** — these can run autonomously. **HITL items** are flagged for the user.
+**AFK items** — these can run autonomously. **HITL items** are flagged for the user.
 
 Spawn a scout first for implementation context, then workers sequentially:
 
@@ -209,7 +173,9 @@ subagent({
 
 ---
 
-## Phase 6: Review
+## Phase 5: Review
+
+Set the tab title to `🔎 Reviewing: <short task>`.
 
 After all work items are complete:
 
@@ -233,7 +199,7 @@ Create work items for P0/P1, run workers to fix, re-review only if fixes were su
 
 ---
 
-## ⚠️ Completion Checklist
+## Completion Checklist
 
 Before reporting done:
 
