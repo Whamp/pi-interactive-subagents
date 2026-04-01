@@ -555,6 +555,10 @@ async function launchSubagent(
   if (agentDefs?.autoExit) {
     envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
   }
+  // Run-scoped artifact identity: tell the subagent where to store artifacts
+  // using the parent's session directory and the subagent's run ID.
+  envParts.push(`PI_ARTIFACT_RUN_ID=${shellEscape(id)}`);
+  envParts.push(`PI_ARTIFACT_SESSION_DIR=${shellEscape(sessionDir)}`);
   const envPrefix = envParts.join(" ") + " ";
 
   // Pass task to the sub-agent.
@@ -799,6 +803,11 @@ function buildFallbackResumeCommand(
   if (running.agentDefs?.autoExit) {
     envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
   }
+  // Propagate run-scoped artifact identity for fallback resume
+  envParts.push(`PI_ARTIFACT_RUN_ID=${shellEscape(running.id)}`);
+  // The session file is in the parent's session directory, so derive it from there
+  const parentSessionDir = dirname(running.sessionFile);
+  envParts.push(`PI_ARTIFACT_SESSION_DIR=${shellEscape(parentSessionDir)}`);
   const envPrefix = envParts.join(" ") + " ";
 
   // Message to continue — written to a temp file for safety

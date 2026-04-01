@@ -4,6 +4,12 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import {
+  resolveArtifactWritePath,
+  resolveArtifactReadDir,
+  getProjectArtifactsDir,
+  getEffectiveSessionDir,
+} from "./artifact-namespace.ts";
 
 const PREVIEW_LINES = 10;
 
@@ -69,8 +75,12 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionDir = ctx.sessionManager.getSessionDir();
       const sessionId = ctx.sessionManager.getSessionId();
-      const artifactDir = join(sessionDir, "artifacts", sessionId);
-      const filePath = resolve(artifactDir, params.name);
+      const { artifactDir, filePath } = resolveArtifactWritePath(
+        params.name,
+        sessionDir,
+        sessionId,
+        process.env as Record<string, string | undefined>,
+      );
 
       // Safety: ensure we're not escaping the artifact directory
       if (!filePath.startsWith(artifactDir)) {
@@ -192,9 +202,16 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionDir = ctx.sessionManager.getSessionDir();
       const sessionId = ctx.sessionManager.getSessionId();
-      const projectArtifactsDir = join(sessionDir, "artifacts");
+      const env = process.env as Record<string, string | undefined>;
 
-      const found = findArtifact(projectArtifactsDir, sessionId, params.name);
+      // When run-scoped, the current run's read dir is the run-scoped dir.
+      // For cross-session/cross-run search, use the project-level artifacts dir
+      // from the effective (parent) session.
+      const currentReadDir = resolveArtifactReadDir(sessionDir, sessionId, env);
+      const projectArtifactsDir = getProjectArtifactsDir(sessionDir, env);
+      const effectiveSessionId = env.PI_ARTIFACT_RUN_ID ?? sessionId;
+
+      const found = findArtifact(projectArtifactsDir, effectiveSessionId, params.name);
 
       if (!found) {
         // List available artifacts to help the agent
@@ -214,8 +231,8 @@ export default function (pi: ExtensionAPI) {
               }
             } catch {}
           };
-          for (const sessionDir of readdirSync(projectArtifactsDir)) {
-            const fullPath = join(projectArtifactsDir, sessionDir);
+          for (const subDir of readdirSync(projectArtifactsDir)) {
+            const fullPath = join(projectArtifactsDir, subDir);
             try {
               if (statSync(fullPath).isDirectory()) {
                 collectArtifacts(fullPath, "");
