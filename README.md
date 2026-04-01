@@ -197,6 +197,7 @@ Place a `.md` file in `.pi/agents/` (project) or `~/.pi/agent/agents/` (global):
 name: my-agent
 description: Does something specific
 model: anthropic/claude-sonnet-4-6
+fallback-models: google/gemini-2.5-pro, zai/glm-5.1
 thinking: minimal
 tools: read, bash, edit, write
 spawning: false
@@ -214,6 +215,7 @@ You are a specialized agent that does X...
 | `name`        | string  | Agent name (used in `agent: "my-agent"`)                                                                                                                                                                                                                                    |
 | `description` | string  | Shown in `subagents_list` output                                                                                                                                                                                                                                            |
 | `model`       | string  | Default model (e.g. `anthropic/claude-sonnet-4-6`)                                                                                                                                                                                                                          |
+| `fallback-models` | string | Comma-separated fallback models tried in order if the primary model fails with an API error (see [Fallback Models](#fallback-models))                                                                                                                                  |
 | `thinking`    | string  | Thinking level: `minimal`, `medium`, `high`                                                                                                                                                                                                                                 |
 | `tools`       | string  | Comma-separated **native pi tools only**: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`                                                                                                                                                                             |
 | `skills`      | string  | Comma-separated skill names to auto-load                                                                                                                                                                                                                                    |
@@ -245,6 +247,36 @@ name: scout
 auto-exit: true
 ---
 ```
+
+---
+
+### Fallback Models
+
+When a model's API fails (overloaded, rate-limited, network errors, capacity issues), pi retries 3 times with exponential backoff. If all retries are exhausted and the subagent exits, `fallback-models` kicks in — the session is **resumed** with the next model in the list, preserving all conversation progress.
+
+```yaml
+---
+name: worker
+model: zai/glm-5.1
+fallback-models: anthropic/claude-sonnet-4-6, google/gemini-2.5-pro
+auto-exit: true
+---
+```
+
+**How it works:**
+
+1. Subagent starts with `model` (primary)
+2. Pi's built-in retry handles transient errors (3 retries, exponential backoff)
+3. If retries exhausted → session resumes with first `fallback-models` entry
+4. If that also fails → next fallback, and so on
+5. If all fallbacks exhausted → reports failure normally
+
+**Key details:**
+
+- Only triggers on **model API errors** (overloaded, rate limit, 429/500/502/503/504, network failures, timeouts). Task failures and user aborts do not trigger fallback.
+- The session file is **resumed**, not relaunched — all prior work (tool calls, code written, commits made) is preserved.
+- The `thinking` level from the agent definition carries over to fallback models.
+- When `model` is explicitly overridden via the `subagent()` call's `model` parameter, fallback models are skipped (the caller chose a specific model).
 
 ---
 

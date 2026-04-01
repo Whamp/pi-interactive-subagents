@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync, copyFileSync } from "node:fs";
+import { readFileSync, appendFileSync, copyFileSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -121,4 +121,46 @@ export function mergeNewEntries(
   }
   return entries;
 }
-const unused = "hello";
+/**
+ * Regex matching pi's retryable API errors (same pattern as pi-coding-agent's
+ * _isRetryableError). These are transient model/provider failures, not task errors.
+ */
+export const RETRYABLE_ERROR_PATTERN =
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+
+/**
+ * Check whether a session file's last assistant message indicates a model API error
+ * (overloaded, rate-limited, network failure, etc.).
+ *
+ * Returns `{ isApiError: true, errorMessage }` when the last assistant message has
+ * `stopReason: "error"` and the `errorMessage` matches pi's retryable error regex.
+ * Returns `{ isApiError: false }` otherwise (task failure, user abort, success, etc.).
+ */
+export function isModelApiError(
+  sessionFile: string,
+): { isApiError: boolean; errorMessage?: string } {
+  if (!existsSync(sessionFile)) return { isApiError: false };
+
+  const raw = readFileSync(sessionFile, "utf8");
+  const lines = raw.split("\n").filter((l) => l.trim());
+
+  // Walk backwards to find the last assistant message
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+
+      const msg = entry.message;
+      if (msg.stopReason === "error" && msg.errorMessage) {
+        return {
+          isApiError: RETRYABLE_ERROR_PATTERN.test(msg.errorMessage),
+          errorMessage: msg.errorMessage,
+        };
+      }
+      // Found last assistant message but it's not an error
+      return { isApiError: false };
+    } catch {}
+  }
+
+  return { isApiError: false };
+}

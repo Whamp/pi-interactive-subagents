@@ -14,6 +14,8 @@ import {
   appendBranchSummary,
   copySessionFile,
   mergeNewEntries,
+  isModelApiError,
+  RETRYABLE_ERROR_PATTERN,
 } from "../pi-extension/subagents/session.ts";
 
 import { shellEscape, isCmuxAvailable } from "../pi-extension/subagents/cmux.ts";
@@ -400,5 +402,248 @@ describe("cmux.ts", () => {
       const result = isCmuxAvailable();
       assert.equal(typeof result, "boolean");
     });
+  });
+});
+
+describe("isModelApiError", () => {
+  let dir: string;
+
+  before(() => {
+    dir = createTestDir();
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("detects overloaded error", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-001",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "overloaded_error: the server is overloaded",
+        },
+      },
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, true);
+    assert.equal(result.errorMessage, "overloaded_error: the server is overloaded");
+  });
+
+  it("detects rate limit error (429)", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-002",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "429 Too Many Requests",
+        },
+      },
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, true);
+  });
+
+  it("detects provider returned error", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-003",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "Provider returned error: 503 Service Unavailable",
+        },
+      },
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, true);
+  });
+
+  it("detects connection/network errors", () => {
+    const cases = [
+      "connection refused",
+      "network error: ECONNRESET",
+      "fetch failed",
+      "socket hang up",
+      "timed out after 30s",
+      "upstream connect error",
+      "502 Bad Gateway",
+      "503 Service Unavailable",
+      "500 Internal Server Error",
+    ];
+    for (const errMsg of cases) {
+      const file = createSessionFile(dir, [
+        SESSION_HEADER,
+        USER_MSG,
+        {
+          type: "message",
+          id: `err-net-${Math.random().toString(16).slice(2, 6)}`,
+          parentId: "user-001",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: errMsg,
+          },
+        },
+      ]);
+      const result = isModelApiError(file);
+      assert.equal(result.isApiError, true, `expected API error for: ${errMsg}`);
+    }
+  });
+
+  it("returns false for non-error stop reasons", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      ASSISTANT_MSG, // stopReason is not set (normal completion)
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, false);
+  });
+
+  it("returns false for non-API errors (task failures)", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-task",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "I encountered an error" }],
+          stopReason: "error",
+          errorMessage: "Context window exceeded maximum length",
+        },
+      },
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, false);
+  });
+
+  it("returns false for aborted sessions", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-abort",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "aborted",
+        },
+      },
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, false);
+  });
+
+  it("returns false for missing session file", () => {
+    const result = isModelApiError("/nonexistent/path.jsonl");
+    assert.equal(result.isApiError, false);
+  });
+
+  it("returns false for empty session file", () => {
+    const file = join(dir, "empty-api.jsonl");
+    writeFileSync(file, "");
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, false);
+  });
+
+  it("skips non-assistant entries to find the last assistant message", () => {
+    const file = createSessionFile(dir, [
+      SESSION_HEADER,
+      USER_MSG,
+      {
+        type: "message",
+        id: "err-api",
+        parentId: "user-001",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "overloaded_error",
+        },
+      },
+      // A tool result after the error (shouldn't happen normally but tests robustness)
+      TOOL_RESULT,
+    ]);
+    const result = isModelApiError(file);
+    assert.equal(result.isApiError, true);
+  });
+});
+
+describe("RETRYABLE_ERROR_PATTERN", () => {
+  it("matches all expected error patterns", () => {
+    const shouldMatch = [
+      "overloaded_error",
+      "provider returned error: 503",
+      "rate limit exceeded",
+      "too many requests",
+      "429 Too Many Requests",
+      "500 Internal Server Error",
+      "502 Bad Gateway",
+      "503 Service Unavailable",
+      "504 Gateway Timeout",
+      "service unavailable",
+      "server error occurred",
+      "internal error",
+      "network error",
+      "connection error",
+      "connection refused",
+      "other side closed",
+      "fetch failed",
+      "upstream connect error",
+      "reset before headers",
+      "socket hang up",
+      "timed out",
+      "timeout",
+      "terminated",
+      "retry delay exceeded",
+    ];
+    for (const err of shouldMatch) {
+      assert.ok(
+        RETRYABLE_ERROR_PATTERN.test(err),
+        `expected pattern to match: ${err}`,
+      );
+    }
+  });
+
+  it("does not match non-API errors", () => {
+    const shouldNotMatch = [
+      "Context window exceeded",
+      "Maximum output tokens reached",
+      "Invalid API key",
+      "Permission denied",
+      "Unknown model",
+      "Billing quota exceeded",
+    ];
+    for (const err of shouldNotMatch) {
+      assert.ok(
+        !RETRYABLE_ERROR_PATTERN.test(err),
+        `expected pattern NOT to match: ${err}`,
+      );
+    }
   });
 });

@@ -28,7 +28,7 @@ import {
   renameCurrentTab,
   renameWorkspace,
 } from "./cmux.ts";
-import { getNewEntries, findLastAssistantMessage } from "./session.ts";
+import { getNewEntries, findLastAssistantMessage, isModelApiError } from "./session.ts";
 
 const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name for the subagent" }),
@@ -65,6 +65,7 @@ const SubagentParams = Type.Object({
 
 interface AgentDefaults {
   model?: string;
+  fallbackModels?: string[];
   tools?: string;
   skills?: string;
   thinking?: string;
@@ -133,8 +134,15 @@ function loadAgentDefaults(agentName: string): AgentDefaults | null {
     const spawningRaw = get("spawning");
     const autoExitRaw = get("auto-exit");
     const spm = get("system-prompt");
+    const fallbackRaw = get("fallback-models");
     return {
       model: get("model"),
+      fallbackModels: fallbackRaw
+        ? fallbackRaw
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined,
       tools: get("tools"),
       systemPromptMode: spm === "replace" ? "replace" : spm === "append" ? "append" : undefined,
       skills: get("skill") ?? get("skills"),
@@ -232,6 +240,14 @@ interface RunningSubagent {
   bytes?: number;
   forkCleanupFile?: string;
   abortController?: AbortController;
+  /** Remaining fallback models to try on model API errors. */
+  fallbackModels?: string[];
+  /** Thinking level from agent defaults, preserved for fallback resume. */
+  effectiveThinking?: string;
+  /** Agent defaults, preserved for fallback resume env reconstruction. */
+  agentDefs?: AgentDefaults | null;
+  /** Resolved set of denied tools, preserved for fallback resume. */
+  denySet?: Set<string>;
 }
 
 /** All currently running subagents, keyed by id. */
@@ -592,6 +608,13 @@ async function launchSubagent(
     startTime,
     sessionFile: subagentSessionFile,
     forkCleanupFile,
+    // Fallback model support: only when using agent defaults (not explicit model override)
+    fallbackModels: !params.model && agentDefs?.fallbackModels?.length
+      ? [...agentDefs.fallbackModels]
+      : undefined,
+    effectiveThinking,
+    agentDefs,
+    denySet,
   };
 
   runningSubagents.set(id, running);
@@ -602,58 +625,105 @@ async function launchSubagent(
  * Watch a launched subagent until it exits. Polls for completion, extracts
  * the summary from the session file, cleans up the surface and fork file,
  * and removes the entry from runningSubagents.
+ *
+ * When the subagent fails with a model API error and fallback models are
+ * available, automatically resumes the session with the next fallback model.
  */
 async function watchSubagent(
   running: RunningSubagent,
   signal: AbortSignal,
 ): Promise<SubagentResult> {
-  const { name, task, surface, startTime, sessionFile, forkCleanupFile } = running;
+  const { name, task, startTime, sessionFile, forkCleanupFile } = running;
 
   try {
-    const exitCode = await pollForExit(surface, signal, {
-      interval: 1000,
-      onTick() {
-        // Update entries/bytes for widget display
-        try {
-          if (existsSync(sessionFile)) {
-            const stat = statSync(sessionFile);
-            const raw = readFileSync(sessionFile, "utf8");
-            running.entries = raw.split("\n").filter((l) => l.trim()).length;
-            running.bytes = stat.size;
+    // Main poll loop — re-enters when a fallback model resumes the session
+    while (true) {
+      const exitCode = await pollForExit(running.surface, signal, {
+        interval: 1000,
+        onTick() {
+          // Update entries/bytes for widget display
+          try {
+            if (existsSync(sessionFile)) {
+              const stat = statSync(sessionFile);
+              const raw = readFileSync(sessionFile, "utf8");
+              running.entries = raw.split("\n").filter((l) => l.trim()).length;
+              running.bytes = stat.size;
+            }
+          } catch {}
+        },
+      });
+
+      // Check for model API error + available fallbacks
+      if (
+        exitCode !== 0 &&
+        running.fallbackModels &&
+        running.fallbackModels.length > 0
+      ) {
+        const { isApiError, errorMessage } = isModelApiError(sessionFile);
+        if (isApiError) {
+          const nextModel = running.fallbackModels.shift()!;
+          const remaining = running.fallbackModels.length;
+
+          // Close the old surface
+          try {
+            closeSurface(running.surface);
+          } catch {}
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+          // Create a new surface
+          if (subagentLayout() === "window") {
+            running.surface = createSurfaceWindow(name);
+          } else {
+            const lastOther = [...runningSubagents.values()]
+              .filter((a) => a.id !== running.id)
+              .pop();
+            running.surface = lastOther
+              ? createSurfaceSplit(name, "down", lastOther.surface)
+              : createSurface(name);
           }
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+          // Build resume command with fallback model
+          const resumeCmd = buildFallbackResumeCommand(running, nextModel);
+          sendCommand(running.surface, resumeCmd);
+
+          // Update widget to reflect the model switch
+          updateWidget();
+
+          // Continue polling on the new surface
+          continue;
+        }
+      }
+
+      // Normal exit (success or non-API failure)
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+
+      let summary: string;
+      if (existsSync(sessionFile)) {
+        const allEntries = getNewEntries(sessionFile, 0);
+        summary =
+          findLastAssistantMessage(allEntries) ??
+          (exitCode !== 0
+            ? `Sub-agent exited with code ${exitCode}`
+            : "Sub-agent exited without output");
+      } else {
+        summary =
+          exitCode !== 0
+            ? `Sub-agent exited with code ${exitCode}`
+            : "Sub-agent exited without output";
+      }
+
+      closeSurface(running.surface);
+      runningSubagents.delete(running.id);
+
+      if (forkCleanupFile) {
+        try {
+          unlinkSync(forkCleanupFile);
         } catch {}
-      },
-    });
+      }
 
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-
-    // Extract summary from the known session file
-    let summary: string;
-    if (existsSync(sessionFile)) {
-      const allEntries = getNewEntries(sessionFile, 0);
-      summary =
-        findLastAssistantMessage(allEntries) ??
-        (exitCode !== 0
-          ? `Sub-agent exited with code ${exitCode}`
-          : "Sub-agent exited without output");
-    } else {
-      summary =
-        exitCode !== 0
-          ? `Sub-agent exited with code ${exitCode}`
-          : "Sub-agent exited without output";
+      return { name, task, summary, sessionFile, exitCode, elapsed };
     }
-
-    closeSurface(surface);
-    runningSubagents.delete(running.id);
-
-    // Clean up temp fork file
-    if (forkCleanupFile) {
-      try {
-        unlinkSync(forkCleanupFile);
-      } catch {}
-    }
-
-    return { name, task, summary, sessionFile, exitCode, elapsed };
   } catch (err: any) {
     if (forkCleanupFile) {
       try {
@@ -661,7 +731,7 @@ async function watchSubagent(
       } catch {}
     }
     try {
-      closeSurface(surface);
+      closeSurface(running.surface);
     } catch {}
     runningSubagents.delete(running.id);
 
@@ -684,6 +754,61 @@ async function watchSubagent(
       error: err?.message ?? String(err),
     };
   }
+}
+
+/**
+ * Build the shell command to resume a subagent session with a fallback model.
+ * Reconstructs the necessary env vars and pi CLI flags from the RunningSubagent state.
+ */
+function buildFallbackResumeCommand(
+  running: RunningSubagent,
+  fallbackModel: string,
+): string {
+  const parts: string[] = ["pi"];
+  parts.push("--session", shellEscape(running.sessionFile));
+
+  // Subagent-done extension for self-termination support
+  const subagentDonePath = join(
+    dirname(new URL(import.meta.url).pathname),
+    "subagent-done.ts",
+  );
+  parts.push("-e", shellEscape(subagentDonePath));
+
+  // Apply fallback model (with thinking level if set)
+  const model = running.effectiveThinking
+    ? `${fallbackModel}:${running.effectiveThinking}`
+    : fallbackModel;
+  parts.push("--model", shellEscape(model));
+
+  // Reconstruct env prefix
+  const envParts: string[] = [];
+  if (process.env.PI_CODING_AGENT_DIR) {
+    envParts.push(
+      `PI_CODING_AGENT_DIR=${shellEscape(process.env.PI_CODING_AGENT_DIR)}`,
+    );
+  }
+  if (running.denySet && running.denySet.size > 0) {
+    envParts.push(
+      `PI_DENY_TOOLS=${shellEscape([...running.denySet].join(","))}`,
+    );
+  }
+  envParts.push(`PI_SUBAGENT_NAME=${shellEscape(running.name)}`);
+  if (running.agent) {
+    envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(running.agent)}`);
+  }
+  if (running.agentDefs?.autoExit) {
+    envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
+  }
+  const envPrefix = envParts.join(" ") + " ";
+
+  // Message to continue — written to a temp file for safety
+  const msg =
+    "The previous model encountered an API error after exhausting retries. " +
+    "You have been switched to a fallback model. Continue your task from where you left off.";
+  parts.push(shellEscape(msg));
+
+  const piCommand = envPrefix + parts.join(" ");
+  return `${piCommand}; echo '__SUBAGENT_DONE_'${exitStatusVar()}'__'`;
 }
 
 export default function subagentsExtension(pi: ExtensionAPI) {
