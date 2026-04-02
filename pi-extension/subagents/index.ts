@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { listRunArtifacts } from "../session-artifacts/artifact-registry.ts";
-import { validateArtifactContract, type ArtifactContract } from "../session-artifacts/artifact-contract.ts";
+import { formatSubagentCompletion } from "./completion.ts";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -65,7 +65,7 @@ const SubagentParams = Type.Object({
   ),
 });
 
-interface AgentDefaults {
+export interface AgentDefaults {
   model?: string;
   fallbackModels?: string[];
   tools?: string;
@@ -928,49 +928,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             const sessionDir = dirname(running.sessionFile ?? "");
             const registry = listRunArtifacts(sessionDir, running.id);
 
-            const sessionRef = result.sessionFile
-              ? `\n\nSession: ${result.sessionFile}\nResume: pi --session ${result.sessionFile}`
-              : "";
-
-            // Build artifact handoff guidance for successful completions
-            let artifactRef = "";
-            if (result.exitCode === 0 && registry.artifacts.length > 0) {
-              const artifactList = registry.artifacts
-                .map((a) => `  - ${a.name}`)
-                .join("\n");
-              artifactRef = `\n\nArtifacts written:\n${artifactList}`;
-              if (registry.primaryArtifact) {
-                artifactRef += `\n\nPrimary artifact: read_artifact("${registry.primaryArtifact}")`;
-              }
-            }
-
-            // Validate artifact contract for successful completions
-            let contractFailureRef = "";
-            const contractDetails: Record<string, unknown> = {};
-            if (result.exitCode === 0 && running.agentDefs) {
-              const contract: ArtifactContract = {
-                required: running.agentDefs.artifactRequired === true,
-                expectedName: running.agentDefs.artifactName,
-              };
-              const validation = validateArtifactContract(contract, registry.artifacts);
-              contractDetails.contractSatisfied = validation.satisfied;
-              contractDetails.contractRequired = contract.required;
-              if (contract.expectedName) {
-                contractDetails.contractExpectedName = contract.expectedName;
-              }
-              if (!validation.satisfied) {
-                contractDetails.contractFailureReason = validation.failureReason;
-                contractDetails.contractRecoveryGuidance = validation.recoveryGuidance;
-                contractFailureRef =
-                  `\n\n⚠ Artifact contract failure: ${validation.failureReason}` +
-                  `\n\nRecovery: ${validation.recoveryGuidance}`;
-              }
-            }
-
-            const content =
-              result.exitCode !== 0
-                ? `Sub-agent "${running.name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${sessionRef}`
-                : `Sub-agent "${running.name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${artifactRef}${contractFailureRef}${sessionRef}`;
+            const { content, details } = formatSubagentCompletion({
+              name: running.name,
+              exitCode: result.exitCode,
+              elapsed: result.elapsed,
+              summary: result.summary,
+              sessionFile: result.sessionFile,
+              artifacts: registry.artifacts,
+              primaryArtifact: registry.primaryArtifact,
+              agentDefs: running.agentDefs,
+            });
 
             pi.sendMessage(
               {
@@ -978,15 +945,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 content,
                 display: true,
                 details: {
-                  name: running.name,
                   task: running.task,
                   agent: running.agent,
-                  exitCode: result.exitCode,
-                  elapsed: result.elapsed,
-                  sessionFile: result.sessionFile,
-                  artifacts: registry.artifacts,
-                  primaryArtifact: registry.primaryArtifact,
-                  ...contractDetails,
+                  ...details,
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },
@@ -1220,6 +1181,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         name: Type.Optional(
           Type.String({ description: "Display name for the terminal tab. Default: 'Resume'" }),
         ),
+        agent: Type.Optional(
+          Type.String({
+            description:
+              "Agent name for artifact contract validation. When provided, validates that artifacts match the agent's declared requirements.",
+          }),
+        ),
         message: Type.Optional(
           Type.String({
             description: "Optional message to send after resuming (e.g. follow-up instructions)",
@@ -1271,6 +1238,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           };
         }
 
+        // Load agent defaults when an agent name is provided
+        const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
+        const denySet = resolveDenyTools(agentDefs);
+
         // Record entry count before resuming so we can extract new messages
         const entryCountBefore = getNewEntries(params.sessionPath, 0).length;
 
@@ -1305,25 +1276,41 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           parts.push(`@${msgFile}`);
         }
 
-        // Build env prefix — propagate PI_CODING_AGENT_DIR for config isolation
+        // Build env prefix — propagate config isolation and artifact identity
         const resumeEnvParts: string[] = [];
         if (process.env.PI_CODING_AGENT_DIR) {
           resumeEnvParts.push(`PI_CODING_AGENT_DIR=${shellEscape(process.env.PI_CODING_AGENT_DIR)}`);
         }
-        const resumeEnvPrefix = resumeEnvParts.length > 0 ? resumeEnvParts.join(" ") + " " : "";
+        if (denySet.size > 0) {
+          resumeEnvParts.push(`PI_DENY_TOOLS=${shellEscape([...denySet].join(","))}`);
+        }
+        resumeEnvParts.push(`PI_SUBAGENT_NAME=${shellEscape(name)}`);
+        if (params.agent) {
+          resumeEnvParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
+        }
+
+        // Propagate artifact identity so resumed subagent writes to the right place
+        const id = Math.random().toString(16).slice(2, 10);
+        const sessionDir = dirname(params.sessionPath);
+        resumeEnvParts.push(`PI_ARTIFACT_RUN_ID=${shellEscape(id)}`);
+        resumeEnvParts.push(`PI_ARTIFACT_SESSION_DIR=${shellEscape(sessionDir)}`);
+
+        const resumeEnvPrefix = resumeEnvParts.join(" ") + " ";
 
         const command = `${resumeEnvPrefix}${parts.join(" ")}${cleanupMsgFile ? `; rm -f ${shellEscape(cleanupMsgFile)}` : ""}; echo '__SUBAGENT_DONE_'${exitStatusVar()}'__'`;
         sendCommand(surface, command);
 
         // Register as a running subagent for widget tracking
-        const id = Math.random().toString(16).slice(2, 10);
         const running: RunningSubagent = {
           id,
           name,
           task: params.message ?? "resumed session",
+          agent: params.agent,
           surface,
           startTime,
           sessionFile: params.sessionPath,
+          agentDefs,
+          denySet,
         };
         runningSubagents.set(id, running);
         startWidgetRefresh();
@@ -1341,19 +1328,29 @@ export default function subagentsExtension(pi: ExtensionAPI) {
               (result.exitCode !== 0
                 ? `Resumed session exited with code ${result.exitCode}`
                 : "Resumed session exited without new output");
-            const sessionRef = `\n\nSession: ${params.sessionPath}\nResume: pi --session ${params.sessionPath}`;
+
+            // Discover artifacts written during the resumed run
+            const registry = listRunArtifacts(sessionDir, running.id);
+
+            const { content, details } = formatSubagentCompletion({
+              name,
+              exitCode: result.exitCode,
+              elapsed: result.elapsed,
+              summary,
+              sessionFile: params.sessionPath,
+              artifacts: registry.artifacts,
+              primaryArtifact: registry.primaryArtifact,
+              agentDefs: running.agentDefs,
+            });
 
             pi.sendMessage(
               {
                 customType: "subagent_result",
-                content: `${summary}${sessionRef}`,
+                content,
                 display: true,
                 details: {
-                  name,
                   task: params.message ?? "resumed session",
-                  exitCode: result.exitCode,
-                  elapsed: result.elapsed,
-                  sessionFile: params.sessionPath,
+                  ...details,
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },
